@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+venv/
+data/*.parquet
+data/*.csv
+data/*.csv.gz
+data/*.tar
+ml/model/
+.DS_Store
