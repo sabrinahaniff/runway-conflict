@@ -2,7 +2,7 @@
 
 <img width="1433" height="758" alt="IMG_8226" src="https://github.com/user-attachments/assets/3f0c61f8-6ec3-405d-9786-398799eaca94" />
 
-
+Built a system that predicts potential runway conflicts between aircraft and ground vehicles using real flight data and time-based risk modeling.
 
 ---
 
