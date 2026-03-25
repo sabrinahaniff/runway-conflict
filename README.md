@@ -28,7 +28,7 @@ It outputs one of three alerts:
 
 The large map shows a bird's-eye view of Los Angeles International Airport (KLAX), looking straight down as if from a helicopter.
 
-**The two horizontal grey bars** are the runways — Runway 24L (top) and Runway 24R (bottom). Each is 3,685 meters long and 61 meters wide. The yellow bars at each end mark the **threshold** — the point where aircraft first touch down. The slightly brighter zone at the left end is the **touchdown zone**, the most critical 900 meters where most landings occur.
+**The two horizontal grey bars** are the runways: Runway 24L (top) and Runway 24R (bottom). Each is 3,685 meters long and 61 meters wide. The yellow bars at each end mark the **threshold**, the point where aircraft first touch down. The slightly brighter zone at the left end is the **touchdown zone**, the most critical 900 meters where most landings occur.
 
 **The triangles** are aircraft. They point right because all aircraft are landing from left to right. Each shows its callsign (UAL232 = United Airlines 232, AAL456 = American Airlines 456, etc). Color shows landing phase:
 - Blue = final approach (still in the air, descending)
@@ -36,7 +36,7 @@ The large map shows a bird's-eye view of Los Angeles International Airport (KLAX
 - Orange = rollout (on runway, braking hard)
 - Purple = vacating (turning off onto a taxiway)
 
-**The squares** are ground vehicles — fire trucks, maintenance crews, fuel trucks, follow-me cars. Their color shows risk level relative to landing aircraft: red = dangerous, orange = caution, natural color = safe.
+**The squares** are ground vehicles: fire trucks, maintenance crews, fuel trucks, follow-me cars. Their color shows risk level relative to landing aircraft: red = dangerous, orange = caution, natural color = safe.
 
 **The dashed lines** show where each entity will be in the next 20 seconds. When a dashed line from an aircraft and a dashed line from a vehicle point toward the same spot, that's a potential conflict.
 
