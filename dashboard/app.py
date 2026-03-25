@@ -1,485 +1,448 @@
-import sys
 import math
+import random
 import requests
-import numpy as np
-from dash import Dash, dcc, html, Input, Output, callback
+from dash import Dash, dcc, html, Input, Output, callback, ctx
 import plotly.graph_objects as go
 
-app = Dash(__name__)
-
+app = Dash(__name__, title="Runway Conflict Monitor")
 API_URL = "http://127.0.0.1:8000"
 
-# runway dimensions (KLAX 24L)
 RUNWAY_LENGTH = 3685.0
-RUNWAY_WIDTH = 61.0
-RUNWAY_HALF_W = RUNWAY_WIDTH / 2
+RUNWAY_HALF_W = 30.5
+RUNWAYS = [
+    {"id": "24L", "y_center": 0,    "label": "Runway 24L"},
+    {"id": "24R", "y_center": -420, "label": "Runway 24R"},
+]
+VTYPES = [
+    {"type": "fire_truck",  "color": "#ff5252"},
+    {"type": "maintenance", "color": "#ffab40"},
+    {"type": "fuel_truck",  "color": "#ce93d8"},
+    {"type": "follow_me",   "color": "#80cbc4"},
+]
 
-# simulation state (moves entities each tick)
-sim = {
-    "aircraft": {"x": -3000.0, "y": 5.0, "speed": 72.0,
-                 "altitude": 280.0, "phase": "final_approach",
-                 "lateral_speed": -0.5, "heading": 0.0},
-    "vehicle":  {"x": -50.0, "y": -(RUNWAY_HALF_W + 60),
-                 "speed": 7.0, "heading": math.pi / 2},
-    "tick": 0,
-    "scenario": "crossing",
-}
+def make_ac(callsign, rwy_y, xoff=0, spd=0):
+    x = -3500 + xoff
+    return {"id": callsign, "x": x, "y": rwy_y,
+            "speed": 72+spd, "lateral_speed": random.uniform(-0.4,0.4),
+            "altitude": max(0, abs(x)*math.tan(math.radians(3))),
+            "phase": "final_approach", "heading": 0.0, "runway": rwy_y}
 
-def _btn_style(bg="#2a2a4a"):
+def make_gv(vid, x, y, speed, heading, ti):
+    vt = VTYPES[ti % len(VTYPES)]
+    return {"id": vid, "x": x, "y": y, "speed": speed,
+            "heading": heading, "type": vt["type"], "color": vt["color"]}
+
+def init_cross():
     return {
-        "background": bg, "color": "#fff", "border": "none",
-        "padding": "8px 14px", "borderRadius": "6px",
-        "cursor": "pointer", "fontFamily": "monospace",
-        "fontSize": "13px",
+        "aircraft": [
+            make_ac("UAL232", 0,    xoff=0,     spd=0),
+            make_ac("AAL456", 0,    xoff=-1800, spd=3),
+            make_ac("DAL789", -420, xoff=0,     spd=-2),
+            make_ac("SWA101", -420, xoff=-2000, spd=1),
+        ],
+        "vehicles": [
+            make_gv("GV001", 300,  -RUNWAY_HALF_W-40,      7.0, math.pi/2,   0),
+            make_gv("GV002", 900,   RUNWAY_HALF_W+40,      5.0, -math.pi/2,  1),
+            make_gv("GV003", 200,  -420-RUNWAY_HALF_W,     6.0, math.pi/2,   0),
+            make_gv("GV004", 1500,  RUNWAY_HALF_W+30,      4.0, math.pi,     2),
+            make_gv("GV005", 2800, -420+RUNWAY_HALF_W,     3.0, -math.pi/2,  3),
+            make_gv("GV006", 600,  -420-RUNWAY_HALF_W-20,  5.5, math.pi/2,   1),
+        ],
+        "history": [], "scenario": "crossing", "tick": 0,
     }
 
-# layout
+def init_safe():
+    return {
+        "aircraft": [
+            make_ac("UAL890", 0,    xoff=0,     spd=0),
+            make_ac("SKW342", 0,    xoff=-1800, spd=2),
+            make_ac("ASA567", -420, xoff=0,     spd=-1),
+        ],
+        "vehicles": [
+            make_gv("GV001", 3000,  RUNWAY_HALF_W+80,       3.0, 0,       2),
+            make_gv("GV002", 3200, -420-RUNWAY_HALF_W-60,   2.0, math.pi, 3),
+            make_gv("GV003", 2800,  RUNWAY_HALF_W+100,      2.0, 0,       1),
+            make_gv("GV004", 3100, -420+RUNWAY_HALF_W+80,   3.0, math.pi, 0),
+        ],
+        "history": [], "scenario": "safe", "tick": 0,
+    }
+
+sim = init_cross()
+
+RISK_COLOR = {"high_risk": "#ff5252", "warning": "#ffab40", "safe": "#69f0ae"}
+RISK_BG    = {"high_risk": "rgba(255,82,82,0.08)", "warning": "rgba(255,171,64,0.08)", "safe": "rgba(105,240,174,0.05)"}
+RISK_LABEL = {"high_risk": "HIGH RISK", "warning": "WARNING", "safe": "ALL SAFE"}
+
+def hbtn(bg, border):
+    return {"background": bg, "color": "#ccc", "border": f"1px solid {border}",
+            "padding": "6px 12px", "borderRadius": "5px", "cursor": "pointer",
+            "fontFamily": "monospace", "fontSize": "11px"}
+
+def leg(sym, color, label):
+    return html.Div([
+        html.Span(sym,   style={"color": color, "marginRight": "8px", "fontSize": "14px"}),
+        html.Span(label, style={"color": "#555", "fontFamily": "monospace", "fontSize": "11px"}),
+    ], style={"display": "flex", "alignItems": "center", "marginBottom": "4px"})
 
 app.layout = html.Div([
+    html.Div([
+        html.Div([
+            html.Span("✈ ", style={"fontSize": "20px"}),
+            html.Span("RUNWAY CONFLICT MONITOR",
+                      style={"fontFamily": "monospace", "fontSize": "16px",
+                             "fontWeight": "bold", "letterSpacing": "3px", "color": "#e0e0e0"}),
+        ]),
+        html.Div([
+            html.Span("● LIVE  ", style={"color": "#69f0ae", "fontFamily": "monospace", "fontSize": "12px"}),
+            html.Span("Los Angeles International · KLAX",
+                      style={"color": "#666", "fontFamily": "monospace", "fontSize": "12px"}),
+        ]),
+        html.Div([
+            html.Button("⚠ Conflict", id="btn-cross", n_clicks=0, style=hbtn("#3a1010","#ff5252")),
+            html.Button("✓ Safe",     id="btn-safe",  n_clicks=0, style=hbtn("#0a2010","#69f0ae")),
+            html.Button("↺ Reset",    id="btn-reset", n_clicks=0, style=hbtn("#1a1a2a","#555")),
+        ], style={"display":"flex","gap":"8px"}),
+    ], style={"background":"#080818","padding":"12px 24px","display":"flex",
+              "justifyContent":"space-between","alignItems":"center",
+              "borderBottom":"1px solid #1a1a3a"}),
+
+    html.Div(id="alert-bar"),
 
     html.Div([
-        html.H2("Runway Conflict Detection",
-                style={"margin": "0", "color": "#fff",
-                       "fontFamily": "monospace", "fontSize": "20px"}),
-        html.Span("LIVE", style={
-            "background": "#34C759", "color": "#fff",
-            "padding": "2px 10px", "borderRadius": "4px",
-            "fontSize": "12px", "fontWeight": "bold",
-            "fontFamily": "monospace",
-        }),
-    ], style={
-        "background": "#1a1a2e", "padding": "14px 24px",
-        "display": "flex", "alignItems": "center", "gap": "16px",
-    }),
-
-    # alert banner
-    html.Div(id="alert-banner", style={
-        "padding": "14px 24px", "fontSize": "16px",
-        "fontFamily": "monospace", "fontWeight": "bold",
-        "textAlign": "center", "transition": "background 0.3s",
-    }),
-
-    # main content
-    html.Div([
-
-        # left — runway view
         html.Div([
-            dcc.Graph(id="runway-plot",
-                      style={"height": "520px"},
-                      config={"displayModeBar": False}),
-        ], style={"flex": "2"}),
-
-        # right — stats panel
-        html.Div([
-            html.Div(id="risk-gauge"),
-            html.Div(id="stats-panel", style={"marginTop": "20px"}),
+            dcc.Graph(id="airport-map", style={"height":"480px"},
+                      config={"displayModeBar":False,"scrollZoom":True}),
             html.Div([
-                html.Button("Crossing scenario", id="btn-crossing", n_clicks=0,
-                            style=_btn_style()),
-                html.Button("Safe scenario", id="btn-safe", n_clicks=0,
-                            style=_btn_style()),
-                html.Button("Reset", id="btn-reset", n_clicks=0,
-                            style=_btn_style("#555")),
-            ], style={"marginTop": "20px", "display": "flex",
-                      "flexDirection": "column", "gap": "8px"}),
-        ], style={
-            "flex": "1", "padding": "20px",
-            "background": "#0f0f1a", "borderRadius": "8px",
-            "margin": "0 0 0 16px",
-        }),
+                html.Div("RISK TIMELINE",
+                         style={"color":"#444","fontFamily":"monospace","fontSize":"10px","marginBottom":"4px"}),
+                dcc.Graph(id="timeline", style={"height":"70px"},
+                          config={"displayModeBar":False}),
+            ], style={"background":"#080818","borderTop":"1px solid #111","padding":"8px 12px"}),
+        ], style={"flex":"2.2","background":"#0a0a1a","borderRadius":"8px","overflow":"hidden"}),
 
-    ], style={
-        "display": "flex", "padding": "16px 24px",
-        "background": "#12122a", "minHeight": "560px",
-    }),
+        html.Div([
+            html.Div(id="status-panel", style={"marginBottom":"10px"}),
+            html.Div([
+                html.Div("LEGEND", style={"color":"#444","fontFamily":"monospace",
+                                           "fontSize":"10px","marginBottom":"8px","letterSpacing":"1px"}),
+                leg("▶","#4fc3f7","Aircraft on approach"),
+                leg("■","#ff5252","Vehicle — HIGH RISK"),
+                leg("■","#ffab40","Vehicle — WARNING"),
+                leg("■","#69f0ae","Vehicle — SAFE"),
+                leg("○","#ff5252","Projected collision zone"),
+                html.Div(style={"height":"1px","background":"#111","margin":"8px 0"}),
+                html.Div("Dashed lines = next 20 seconds",
+                         style={"color":"#333","fontSize":"10px","fontFamily":"monospace"}),
+            ], style={"background":"#0a0a1a","padding":"12px","borderRadius":"6px",
+                      "marginBottom":"10px","border":"1px solid #1a1a3a"}),
+            html.Div([
+                html.Div("ALL MONITORED PAIRS",
+                         style={"color":"#444","fontFamily":"monospace",
+                                "fontSize":"10px","marginBottom":"8px","letterSpacing":"1px"}),
+                html.Div(id="pairs-table"),
+            ], style={"background":"#0a0a1a","padding":"12px","borderRadius":"6px",
+                      "border":"1px solid #1a1a3a","flex":"1","overflowY":"auto"}),
+        ], style={"flex":"1","marginLeft":"10px","display":"flex","flexDirection":"column","maxHeight":"560px"}),
+    ], style={"display":"flex","padding":"10px 12px","gap":"10px","background":"#060614"}),
 
-    # ticker
-    dcc.Interval(id="ticker", interval=500, n_intervals=0),
-
-    # hidden stores
-    dcc.Store(id="scenario-store", data="crossing"),
-    dcc.Store(id="prediction-store", data={}),
-
-], style={"background": "#12122a", "minHeight": "100vh"})
+    dcc.Interval(id="tick", interval=400, n_intervals=0),
+    dcc.Store(id="sc-store", data="crossing"),
+], style={"background":"#060614","minHeight":"100vh"})
 
 
-def _btn_style(bg="#2a2a4a"):
-    return {
-        "background": bg, "color": "#fff", "border": "none",
-        "padding": "8px 14px", "borderRadius": "6px",
-        "cursor": "pointer", "fontFamily": "monospace",
-        "fontSize": "13px",
-    }
-
-
-# scenario control
-
-@callback(
-    Output("scenario-store", "data"),
-    Input("btn-crossing", "n_clicks"),
-    Input("btn-safe", "n_clicks"),
-    Input("btn-reset", "n_clicks"),
-    prevent_initial_call=True,
-)
-def set_scenario(cross, safe, reset):
-    from dash import ctx
-    btn = ctx.triggered_id
-    if btn == "btn-crossing":
-        _init_crossing()
-        return "crossing"
-    elif btn == "btn-safe":
-        _init_safe()
-        return "safe"
+@callback(Output("sc-store","data"),
+          Input("btn-cross","n_clicks"), Input("btn-safe","n_clicks"), Input("btn-reset","n_clicks"),
+          prevent_initial_call=True)
+def switch(c1,c2,c3):
+    if ctx.triggered_id == "btn-safe":
+        sim.update(init_safe()); return "safe"
     else:
-        _init_crossing()
-        return "crossing"
+        sim.update(init_cross()); return "crossing"
 
-
-def _init_crossing():
-    sim["aircraft"] = {"x": -3000.0, "y": 5.0, "speed": 72.0,
-                       "altitude": 280.0, "phase": "final_approach",
-                       "lateral_speed": -0.5, "heading": 0.0}
-    sim["vehicle"] = {"x": 300.0, "y": -(RUNWAY_HALF_W + 60),
-                      "speed": 7.0, "heading": math.pi / 2}
-    sim["tick"] = 0
-    sim["scenario"] = "crossing"
-
-
-def _init_safe():
-    sim["aircraft"] = {"x": -3000.0, "y": 5.0, "speed": 72.0,
-                       "altitude": 280.0, "phase": "final_approach",
-                       "lateral_speed": -0.5, "heading": 0.0}
-    sim["vehicle"] = {"x": 1800.0, "y": RUNWAY_HALF_W + 150,
-                      "speed": 4.0, "heading": 0.0}
-    sim["tick"] = 0
-    sim["scenario"] = "safe"
-
-
-#main tick callback
 
 @callback(
-    Output("runway-plot", "figure"),
-    Output("alert-banner", "children"),
-    Output("alert-banner", "style"),
-    Output("risk-gauge", "children"),
-    Output("stats-panel", "children"),
-    Output("prediction-store", "data"),
-    Input("ticker", "n_intervals"),
-    Input("scenario-store", "data"),
+    Output("airport-map","figure"), Output("timeline","figure"),
+    Output("alert-bar","children"), Output("status-panel","children"),
+    Output("pairs-table","children"),
+    Input("tick","n_intervals"), Input("sc-store","data"),
 )
-def update(n, scenario):
-    # advance simulation
-    _tick_simulation()
-
-    # send positions to API
-    ac = sim["aircraft"]
-    gv = sim["vehicle"]
-
-    try:
-        requests.post(f"{API_URL}/update/aircraft", json={
-            "id": "AC001", "x": ac["x"], "y": ac["y"],
-            "speed": ac["speed"], "heading": ac["heading"],
-            "altitude": ac["altitude"], "phase": ac["phase"],
-            "lateral_speed": ac["lateral_speed"],
-        }, timeout=0.5)
-
-        requests.post(f"{API_URL}/update/vehicle", json={
-            "id": "GV001", "x": gv["x"], "y": gv["y"],
-            "speed": gv["speed"], "heading": gv["heading"],
-        }, timeout=0.5)
-
-        resp = requests.get(f"{API_URL}/predict", timeout=0.5)
-        pred_data = resp.json()
-        alert_info = pred_data["alerts"][0]["alert"] if pred_data["alerts"] else None
-        pred_info = pred_data["alerts"][0]["prediction"] if pred_data["alerts"] else None
-    except Exception:
-        alert_info = {"risk_level": "safe", "color": "#34C759",
-                      "message": "API not reachable", "should_alarm": False}
-        pred_info = None
-
-    # build runway figure
-    fig = _build_figure(ac, gv, pred_info)
-
-    # alert banner
-    color = alert_info["color"] if alert_info else "#34C759"
-    msg = alert_info["message"] if alert_info else "No data"
-    banner_style = {
-        "padding": "14px 24px", "fontSize": "16px",
-        "fontFamily": "monospace", "fontWeight": "bold",
-        "textAlign": "center", "background": color,
-        "color": "#fff", "transition": "background 0.3s",
-    }
-
-    # risk gauge
-    level = alert_info["risk_level"] if alert_info else "safe"
-    score = pred_info["risk_score"] if pred_info else 0.0
-    gauge = _build_gauge(level, score)
-
-    # stats panel
-    stats = _build_stats(ac, gv, pred_info)
-
-    return fig, msg, banner_style, gauge, stats, pred_info or {}
+def update(n, sc):
+    advance()
+    preds = fetch()
+    order = {"high_risk":2,"warning":1,"safe":0}
+    worst = max(preds, key=lambda p: order.get(p["prediction"]["risk_level"],0), default=None)
+    wlvl  = worst["prediction"]["risk_level"] if worst else "safe"
+    sim["history"].append({"safe":0.05,"warning":0.5,"high_risk":1.0}[wlvl])
+    if len(sim["history"]) > 120: sim["history"].pop(0)
+    return draw_map(preds), draw_timeline(), draw_alert(wlvl,worst), draw_status(wlvl,preds), draw_table(preds)
 
 
-# simulation physics
-
-def _tick_simulation():
-    dt = 0.5
-    ac = sim["aircraft"]
-    gv = sim["vehicle"]
-
-    # Aircraft movement
-    if ac["phase"] == "final_approach":
-        ac["x"] += ac["speed"] * dt
-        ac["y"] += ac["lateral_speed"] * dt
-        ac["altitude"] = max(0, -ac["x"] * math.tan(math.radians(3)))
-        if ac["x"] >= -150:
-            ac["phase"] = "flare"
-
-    elif ac["phase"] == "flare":
-        ac["x"] += ac["speed"] * dt
-        ac["altitude"] = max(0, ac["altitude"] * 0.85)
-        ac["y"] *= 0.98
-        if ac["x"] >= 0:
-            ac["phase"] = "rollout"
-
-    elif ac["phase"] == "rollout":
-        ac["speed"] = max(15, ac["speed"] - 1.8 * dt)
-        ac["x"] += ac["speed"] * dt
-        ac["y"] *= 0.99
-        if ac["speed"] <= 16 and ac["x"] > RUNWAY_LENGTH * 0.4:
-            ac["phase"] = "vacating"
-
-    elif ac["phase"] == "vacating":
-        ac["speed"] = max(5, ac["speed"] - 1.0 * dt)
-        ac["x"] += ac["speed"] * dt
-        ac["y"] += 2 * dt
-        if ac["y"] > RUNWAY_HALF_W + 30:
-            ac["phase"] = "clear"
-            _reset_aircraft()
-
-    # Vehicle movement
-    gv["x"] += gv["speed"] * math.cos(gv["heading"]) * dt
-    gv["y"] += gv["speed"] * math.sin(gv["heading"]) * dt
-
-    # Wrap vehicle if it goes too far
-    if abs(gv["y"]) > RUNWAY_HALF_W + 120:
-        if sim["scenario"] == "crossing":
-            gv["heading"] = -gv["heading"]
-        else:
-            gv["x"] = min(gv["x"] + 5 * dt, RUNWAY_LENGTH - 100)
-
+def advance():
+    dt = 0.4
+    for ac in sim["aircraft"]:
+        ry = ac["runway"]
+        ph = ac["phase"]
+        if ph == "final_approach":
+            ac["x"] += ac["speed"]*dt
+            ac["y"] += ac.get("lateral_speed",0)*dt
+            ac["altitude"] = max(0, -ac["x"]*math.tan(math.radians(3)))
+            ac["y"] += (ry - ac["y"])*0.05
+            if ac["x"] >= -150: ac["phase"] = "flare"
+        elif ph == "flare":
+            ac["x"] += ac["speed"]*dt
+            ac["altitude"] = max(0, ac["altitude"]*0.80)
+            ac["y"] += (ry - ac["y"])*0.15
+            if ac["x"] >= 0: ac["phase"] = "rollout"; ac["altitude"] = 0
+        elif ph == "rollout":
+            ac["speed"] = max(15, ac["speed"]-1.8*dt)
+            ac["x"] += ac["speed"]*dt
+            ac["y"] += (ry - ac["y"])*0.2
+            if ac["speed"] <= 16 and ac["x"] > RUNWAY_LENGTH*0.4: ac["phase"] = "vacating"
+        elif ph == "vacating":
+            ac["speed"] = max(5, ac["speed"]-1.0*dt)
+            ac["x"] += ac["speed"]*dt
+            ac["y"] += (ry+RUNWAY_HALF_W+50-ac["y"])*0.05
+            if ac["x"] > RUNWAY_LENGTH+500:
+                ac["x"] = -3500+random.uniform(-200,200)
+                ac["y"] = ry+random.uniform(-5,5)
+                ac["speed"] = 72+random.uniform(-4,4)
+                ac["altitude"] = abs(ac["x"])*math.tan(math.radians(3))
+                ac["phase"] = "final_approach"
+                ac["lateral_speed"] = random.uniform(-0.4,0.4)
+    for gv in sim["vehicles"]:
+        gv["x"] += gv["speed"]*math.cos(gv["heading"])*dt
+        gv["y"] += gv["speed"]*math.sin(gv["heading"])*dt
+        if abs(gv["y"]) > 550: gv["heading"] = math.pi - gv["heading"]
+        if gv["x"] > RUNWAY_LENGTH+200: gv["x"] = -200.0
+        elif gv["x"] < -200: gv["x"] = RUNWAY_LENGTH+200.0
     sim["tick"] += 1
 
 
-def _reset_aircraft():
-    sim["aircraft"] = {
-        "x": -3000.0, "y": 5.0, "speed": 72.0,
-        "altitude": 280.0, "phase": "final_approach",
-        "lateral_speed": -0.5, "heading": 0.0,
-    }
+def fetch():
+    try:
+        requests.post(f"{API_URL}/reset", headers={"Content-Type":"application/json"}, timeout=0.3)
+        for ac in sim["aircraft"]:
+            requests.post(f"{API_URL}/update/aircraft", json={
+                "id":ac["id"],"x":ac["x"],"y":ac["y"],"speed":ac["speed"],
+                "heading":ac["heading"],"altitude":ac["altitude"],
+                "phase":ac["phase"],"lateral_speed":ac.get("lateral_speed",0),
+            }, timeout=0.3)
+        for gv in sim["vehicles"]:
+            requests.post(f"{API_URL}/update/vehicle", json={
+                "id":gv["id"],"x":gv["x"],"y":gv["y"],"speed":gv["speed"],"heading":gv["heading"],
+            }, timeout=0.3)
+        return requests.get(f"{API_URL}/predict", timeout=0.5).json().get("alerts",[])
+    except:
+        return []
 
 
-# figure builder
-
-def _build_figure(ac, gv, pred):
+def draw_map(preds):
     fig = go.Figure()
 
-    # runway surface
-    fig.add_shape(type="rect",
-                  x0=0, x1=RUNWAY_LENGTH,
-                  y0=-RUNWAY_HALF_W, y1=RUNWAY_HALF_W,
-                  fillcolor="#2a2a2a", line=dict(color="#555", width=1))
+    # Background
+    fig.add_shape(type="rect", x0=-600, x1=RUNWAY_LENGTH+500, y0=-620, y1=200,
+                  fillcolor="#080810", line=dict(width=0))
 
-    # runway centerline
-    fig.add_shape(type="line",
-                  x0=0, x1=RUNWAY_LENGTH, y0=0, y1=0,
-                  line=dict(color="#fff", width=1, dash="dash"))
+    # Runways
+    for rwy in RUNWAYS:
+        cy = rwy["y_center"]
+        fig.add_shape(type="rect", x0=0, x1=RUNWAY_LENGTH,
+                      y0=cy-RUNWAY_HALF_W, y1=cy+RUNWAY_HALF_W,
+                      fillcolor="#1e1e1e", line=dict(color="#333",width=1))
+        for i in range(0, int(RUNWAY_LENGTH), 150):
+            fig.add_shape(type="line", x0=i, x1=i+80, y0=cy, y1=cy,
+                          line=dict(color="rgba(255,255,255,0.13)",width=2))
+        for tx in [0, RUNWAY_LENGTH]:
+            fig.add_shape(type="rect", x0=tx-8, x1=tx+8,
+                          y0=cy-RUNWAY_HALF_W, y1=cy+RUNWAY_HALF_W,
+                          fillcolor="#ffcc00", line=dict(width=0))
+        fig.add_shape(type="rect", x0=0, x1=900,
+                      y0=cy-RUNWAY_HALF_W, y1=cy+RUNWAY_HALF_W,
+                      fillcolor="rgba(255,204,0,0.04)",
+                      line=dict(color="rgba(255,204,0,0.1)",width=1))
+        fig.add_annotation(x=RUNWAY_LENGTH+60, y=cy, text=rwy["label"],
+                           font=dict(size=10,color="#555",family="monospace"),
+                           showarrow=False, xanchor="left")
+        for sign in [-1,1]:
+            fig.add_shape(type="line", x0=-600, x1=0,
+                          y0=cy+sign*RUNWAY_HALF_W, y1=cy+sign*RUNWAY_HALF_W,
+                          line=dict(color="rgba(255,255,255,0.03)",width=1))
 
-    # threshold markers
-    for rx in [0, RUNWAY_LENGTH]:
-        fig.add_shape(type="line",
-                      x0=rx, x1=rx,
-                      y0=-RUNWAY_HALF_W, y1=RUNWAY_HALF_W,
-                      line=dict(color="#ffcc00", width=2))
+    # Worst risk per vehicle
+    veh_risk = {}
+    order = {"high_risk":2,"warning":1,"safe":0}
+    for p in preds:
+        vid = p["prediction"]["vehicle_id"]
+        lvl = p["prediction"]["risk_level"]
+        if vid not in veh_risk or order[lvl] > order[veh_risk[vid]]:
+            veh_risk[vid] = lvl
 
-    # touchdown zone
-    fig.add_shape(type="rect",
-                  x0=0, x1=900,
-                  y0=-RUNWAY_HALF_W, y1=RUNWAY_HALF_W,
-                  fillcolor="rgba(255,200,0,0.06)",
-                  line=dict(color="rgba(255,200,0,0.2)", width=1))
+    # CPA zones
+    for p in preds:
+        lvl = p["prediction"]["risk_level"]
+        if lvl not in ("warning","high_risk"): continue
+        pred = p["prediction"]
+        ac = next((a for a in sim["aircraft"] if a["id"]==pred["aircraft_id"]),None)
+        if not ac: continue
+        t = pred["time_to_cpa_s"]
+        cx = ac["x"] + ac["speed"]*t
+        cy2 = ac["y"]
+        r = 80 if lvl=="high_risk" else 50
+        fc = "rgba(255,82,82,0.15)" if lvl=="high_risk" else "rgba(255,171,64,0.12)"
+        bc = "#ff5252" if lvl=="high_risk" else "#ffab40"
+        fig.add_shape(type="circle", x0=cx-r, x1=cx+r, y0=cy2-r*0.6, y1=cy2+r*0.6,
+                      fillcolor=fc, line=dict(color=bc,width=1.5,dash="dash"))
+        fig.add_annotation(x=cx, y=cy2-r*0.6-18,
+                           text=f"⚠ {pred['cpa_distance_m']:.0f}m · {t:.0f}s",
+                           font=dict(size=10,color=bc,family="monospace"),
+                           showarrow=False,
+                           bgcolor="rgba(8,8,20,0.85)",
+                           bordercolor=bc, borderwidth=1)
 
-    # aircraft projected path (dashed line)
-    proj_x = ac["x"] + ac["speed"] * 30
-    fig.add_shape(type="line",
-                  x0=ac["x"], x1=proj_x,
-                  y0=ac["y"], y1=ac["y"],
-                  line=dict(color="#4fc3f7", width=1, dash="dot"))
-
-    # vehicle projected path
-    vproj_x = gv["x"] + gv["speed"] * math.cos(gv["heading"]) * 20
-    vproj_y = gv["y"] + gv["speed"] * math.sin(gv["heading"]) * 20
-    fig.add_shape(type="line",
-                  x0=gv["x"], x1=vproj_x,
-                  y0=gv["y"], y1=vproj_y,
-                  line=dict(color="#ff9800", width=1, dash="dot"))
-
-    # risk color
-    risk_color = "#FF3B30" if (pred and pred.get("risk_level") == "high_risk") \
-        else "#FF9500" if (pred and pred.get("risk_level") == "warning") \
-        else "#34C759"
-
-    # aircraft marker
-    fig.add_trace(go.Scatter(
-        x=[ac["x"]], y=[ac["y"]],
-        mode="markers+text",
-        marker=dict(symbol="triangle-right", size=18,
-                    color="#4fc3f7", line=dict(color="#fff", width=1)),
-        text=["AC001"], textposition="top center",
-        textfont=dict(color="#4fc3f7", size=11),
-        name="Aircraft", showlegend=False,
-    ))
-
-    # vehicle marker
-    fig.add_trace(go.Scatter(
-        x=[gv["x"]], y=[gv["y"]],
-        mode="markers+text",
-        marker=dict(symbol="square", size=14,
-                    color=risk_color, line=dict(color="#fff", width=1)),
-        text=["GV001"], textposition="top center",
-        textfont=dict(color=risk_color, size=11),
-        name="Vehicle", showlegend=False,
-    ))
-
-    # cpa point if warning/high_risk
-    if pred and pred.get("risk_level") in ("warning", "high_risk"):
-        cpa_x = ac["x"] + ac["speed"] * pred.get("time_to_cpa_s", 0)
+    # Vehicles
+    for gv in sim["vehicles"]:
+        lvl   = veh_risk.get(gv["id"],"safe")
+        color = RISK_COLOR.get(lvl, gv["color"]) if lvl != "safe" else gv["color"]
+        px = gv["x"] + gv["speed"]*math.cos(gv["heading"])*20
+        py = gv["y"] + gv["speed"]*math.sin(gv["heading"])*20
+        fig.add_shape(type="line", x0=gv["x"], x1=px, y0=gv["y"], y1=py,
+                      line=dict(color="rgba(180,180,180,0.25)",width=1,dash="dot"))
         fig.add_trace(go.Scatter(
-            x=[cpa_x], y=[0],
-            mode="markers",
-            marker=dict(symbol="x", size=14,
-                        color="#FF3B30", line=dict(width=2)),
-            name="CPA", showlegend=False,
+            x=[gv["x"]], y=[gv["y"]], mode="markers+text",
+            marker=dict(symbol="square",size=10,color=color,line=dict(color="#fff",width=0.8)),
+            text=[gv["id"]], textposition="top center",
+            textfont=dict(color=color,size=9,family="monospace"),
+            showlegend=False,
+            hovertemplate=(f"<b>{gv['id']}</b><br>Type: {gv['type']}<br>"
+                           f"X: {gv['x']:.0f}m<br>Speed: {gv['speed']:.1f} m/s<br>"
+                           f"Risk: <b>{lvl}</b><extra></extra>"),
+        ))
+
+    # Aircraft
+    for ac in sim["aircraft"]:
+        pc = {"flare":"#ffcc00","rollout":"#ff9800","vacating":"#ab47bc"}
+        color = pc.get(ac["phase"],"#4fc3f7")
+        px = ac["x"] + ac["speed"]*20
+        fig.add_shape(type="line", x0=ac["x"], x1=px, y0=ac["y"], y1=ac["y"],
+                      line=dict(color="rgba(79,195,247,0.25)",width=1,dash="dot"))
+        fig.add_trace(go.Scatter(
+            x=[ac["x"]], y=[ac["y"]], mode="markers+text",
+            marker=dict(symbol="triangle-right",size=14,color=color,line=dict(color="#fff",width=1)),
+            text=[ac["id"]], textposition="top center",
+            textfont=dict(color=color,size=9,family="monospace"),
+            showlegend=False,
+            hovertemplate=(f"<b>{ac['id']}</b><br>Phase: {ac['phase']}<br>"
+                           f"X: {ac['x']:.0f}m<br>Alt: {ac['altitude']:.0f}m<br>"
+                           f"Speed: {ac['speed']:.1f} m/s<extra></extra>"),
         ))
 
     fig.update_layout(
-        paper_bgcolor="#12122a",
-        plot_bgcolor="#1a1a2e",
-        margin=dict(l=20, r=20, t=30, b=20),
-        xaxis=dict(
-            range=[-500, RUNWAY_LENGTH + 200],
-            showgrid=False, zeroline=False,
-            tickfont=dict(color="#888", size=10),
-            title=dict(text="meters along runway", font=dict(color="#888")),
-        ),
-        yaxis=dict(
-            range=[-120, 120],
-            showgrid=False, zeroline=False,
-            tickfont=dict(color="#888", size=10),
-            scaleanchor="x", scaleratio=1,
-        ),
-        title=dict(
-            text="KLAX Runway 24L — Live View",
-            font=dict(color="#aaa", size=13, family="monospace"),
-            x=0.5,
-        ),
+        paper_bgcolor="#080810", plot_bgcolor="#080810",
+        margin=dict(l=10,r=10,t=10,b=10),
+        xaxis=dict(range=[-600,RUNWAY_LENGTH+500], showgrid=False, zeroline=False,
+                   tickfont=dict(color="#333",size=9,family="monospace"),
+                   title=dict(text="distance along runway (meters)",font=dict(color="#333",size=10))),
+        yaxis=dict(range=[-620,200], showgrid=False, zeroline=False, showticklabels=False,
+                   scaleanchor="x", scaleratio=1),
+        hovermode="closest", showlegend=False,
     )
-
     return fig
 
 
-#gauge and stats
+def draw_timeline():
+    h = sim["history"] or [0]
+    v = h[-1]
+    color = "#ff5252" if v>=0.9 else "#ffab40" if v>=0.4 else "#69f0ae"
+    fc = "rgba(255,82,82,0.13)" if v>=0.9 else "rgba(255,171,64,0.13)" if v>=0.4 else "rgba(105,240,174,0.13)"
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=list(range(len(h))), y=h,
+                             fill="tozeroy", fillcolor=fc,
+                             line=dict(color=color,width=1.5),
+                             mode="lines", showlegend=False))
+    fig.add_shape(type="line", x0=0, x1=120, y0=0.4, y1=0.4,
+                  line=dict(color="rgba(255,171,64,0.3)",width=1,dash="dot"))
+    fig.add_shape(type="line", x0=0, x1=120, y0=0.9, y1=0.9,
+                  line=dict(color="rgba(255,82,82,0.3)",width=1,dash="dot"))
+    fig.update_layout(
+        paper_bgcolor="#080818", plot_bgcolor="#080818",
+        margin=dict(l=0,r=0,t=0,b=0),
+        xaxis=dict(showgrid=False,zeroline=False,showticklabels=False),
+        yaxis=dict(showgrid=False,zeroline=False,showticklabels=False,range=[0,1.05]),
+    )
+    return fig
 
-def _build_gauge(level, score):
-    color = {"high_risk": "#FF3B30",
-             "warning": "#FF9500",
-             "safe": "#34C759"}.get(level, "#34C759")
-    label = {"high_risk": "HIGH RISK",
-             "warning": "WARNING",
-             "safe": "SAFE"}.get(level, "SAFE")
 
+def draw_alert(lvl, worst):
+    color = RISK_COLOR.get(lvl,"#69f0ae")
+    bgs = {"high_risk":"rgba(255,82,82,0.08)","warning":"rgba(255,171,64,0.08)","safe":"rgba(105,240,174,0.05)"}
+    bg = bgs.get(lvl,"rgba(105,240,174,0.05)")
+    labels = {"high_risk":"⚠ HIGH RISK DETECTED","warning":"⚠ CAUTION — CONFLICT WARNING","safe":"● ALL CLEAR"}
+    title = labels.get(lvl,"● ALL CLEAR")
+    if worst and lvl != "safe":
+        p = worst["prediction"]
+        detail = (f"{p['aircraft_id']} ↔ {p['vehicle_id']}  ·  "
+                  f"CPA {p['cpa_distance_m']:.0f}m  ·  {p['time_to_cpa_s']:.0f}s  ·  "
+                  f"{len(sim['aircraft'])} aircraft · {len(sim['vehicles'])} vehicles")
+    else:
+        detail = (f"Monitoring {len(sim['aircraft'])*len(sim['vehicles'])} pairs — "
+                  f"{len(sim['aircraft'])} aircraft · {len(sim['vehicles'])} vehicles")
     return html.Div([
-        html.Div(label, style={
-            "background": color, "color": "#fff",
-            "padding": "16px", "borderRadius": "8px",
-            "textAlign": "center", "fontSize": "22px",
-            "fontWeight": "bold", "fontFamily": "monospace",
-            "letterSpacing": "2px",
-        }),
-        html.Div([
-            html.Div(style={
-                "width": f"{score * 100:.0f}%",
-                "height": "8px",
-                "background": color,
-                "borderRadius": "4px",
-                "transition": "width 0.4s",
-            }),
-        ], style={
-            "background": "#2a2a4a", "borderRadius": "4px",
-            "marginTop": "10px", "overflow": "hidden",
-        }),
-        html.Div(f"Confidence: {score:.1%}", style={
-            "color": "#888", "fontSize": "11px",
-            "fontFamily": "monospace", "marginTop": "4px",
-        }),
-    ])
+        html.Span(f"{title}  ", style={"fontWeight":"bold"}),
+        html.Span(detail, style={"opacity":"0.8"}),
+    ], style={"padding":"10px 24px","fontFamily":"monospace","fontSize":"13px",
+              "color":color,"background":bg,"borderBottom":f"1px solid {color}"})
 
 
-def _build_stats(ac, gv, pred):
-    def row(label, value, color="#ccc"):
+def draw_status(lvl, preds):
+    color = RISK_COLOR.get(lvl,"#69f0ae")
+    label = RISK_LABEL.get(lvl,"ALL SAFE")
+    n_h = sum(1 for p in preds if p["prediction"]["risk_level"]=="high_risk")
+    n_w = sum(1 for p in preds if p["prediction"]["risk_level"]=="warning")
+    n_s = sum(1 for p in preds if p["prediction"]["risk_level"]=="safe")
+    def badge(count, lbl, c):
         return html.Div([
-            html.Span(label, style={"color": "#666",
-                                    "fontFamily": "monospace",
-                                    "fontSize": "12px"}),
-            html.Span(value, style={"color": color,
-                                    "fontFamily": "monospace",
-                                    "fontSize": "12px",
-                                    "float": "right"}),
-        ], style={"borderBottom": "1px solid #1a1a3a",
-                  "padding": "6px 0"})
+            html.Div(count, style={"fontSize":"20px","fontWeight":"bold","color":c,"fontFamily":"monospace"}),
+            html.Div(lbl,   style={"fontSize":"9px","color":"#444","fontFamily":"monospace"}),
+        ], style={"background":RISK_BG.get(lbl.lower().replace(" ","_"),"rgba(100,100,100,0.05)"),
+                  "border":f"1px solid {c}",
+                  "borderRadius":"5px","padding":"6px 10px","textAlign":"center","flex":"1"})
+    return html.Div([
+        html.Div(label, style={"fontFamily":"monospace","fontSize":"22px","fontWeight":"bold",
+                               "color":color,"letterSpacing":"2px","marginBottom":"10px"}),
+        html.Div([badge(str(n_h),"HIGH RISK","#ff5252"),
+                  badge(str(n_w),"WARNING","#ffab40"),
+                  badge(str(n_s),"SAFE","#69f0ae")],
+                 style={"display":"flex","gap":"6px"}),
+    ], style={"background":"#0a0a1a","padding":"14px","borderRadius":"8px",
+              "border":f"1px solid {color}"})
 
-    phase_colors = {
-        "final_approach": "#4fc3f7",
-        "flare": "#ffcc00",
-        "rollout": "#ff9800",
-        "vacating": "#ab47bc",
-        "clear": "#34C759",
-    }
 
-    items = [
-        html.Div("AIRCRAFT", style={"color": "#4fc3f7",
-                                     "fontFamily": "monospace",
-                                     "fontSize": "11px",
-                                     "marginBottom": "4px"}),
-        row("Position X", f"{ac['x']:.0f}m"),
-        row("Altitude", f"{ac['altitude']:.0f}m"),
-        row("Speed", f"{ac['speed']:.1f} m/s"),
-        row("Phase", ac["phase"],
-            phase_colors.get(ac["phase"], "#ccc")),
-        html.Div("VEHICLE", style={"color": "#ff9800",
-                                    "fontFamily": "monospace",
-                                    "fontSize": "11px",
-                                    "marginTop": "12px",
-                                    "marginBottom": "4px"}),
-        row("Position X", f"{gv['x']:.0f}m"),
-        row("Position Y", f"{gv['y']:.0f}m"),
-        row("Speed", f"{gv['speed']:.1f} m/s"),
-    ]
-
-    if pred:
-        items += [
-            html.Div("PREDICTION", style={"color": "#888",
-                                           "fontFamily": "monospace",
-                                           "fontSize": "11px",
-                                           "marginTop": "12px",
-                                           "marginBottom": "4px"}),
-            row("Separation", f"{pred.get('current_separation_m', 0):.0f}m"),
-            row("CPA distance", f"{pred.get('cpa_distance_m', 0):.0f}m"),
-            row("Time to CPA", f"{pred.get('time_to_cpa_s', 0):.1f}s"),
-        ]
-
-    return html.Div(items)
+def draw_table(preds):
+    if not preds:
+        return html.Div("Waiting for data...",
+                        style={"color":"#333","fontFamily":"monospace","fontSize":"12px"})
+    def th(t): return html.Div(t, style={"flex":"1","fontFamily":"monospace","fontSize":"9px",
+                                          "color":"#333","letterSpacing":"1px"})
+    def td(t,c): return html.Div(t, style={"flex":"1","fontFamily":"monospace","fontSize":"11px",
+                                            "color":c,"padding":"0 4px"})
+    rows = [html.Div([th("Aircraft"),th("Vehicle"),th("Risk"),th("CPA"),th("Time")],
+                     style={"display":"flex","borderBottom":"1px solid #111",
+                            "paddingBottom":"6px","marginBottom":"4px"})]
+    order = {"high_risk":0,"warning":1,"safe":2}
+    for p in sorted(preds, key=lambda p: order[p["prediction"]["risk_level"]]):
+        pred = p["prediction"]
+        lvl  = pred["risk_level"]
+        c    = RISK_COLOR.get(lvl,"#69f0ae")
+        rows.append(html.Div([
+            td(pred["aircraft_id"],"#888"),
+            td(pred["vehicle_id"],"#666"),
+            td(lvl.replace("_"," ").upper(), c),
+            td(f"{pred['cpa_distance_m']:.0f}m","#888"),
+            td(f"{pred['time_to_cpa_s']:.0f}s","#888"),
+        ], style={"display":"flex","borderBottom":"1px solid #0d0d1a","padding":"5px 0",
+                  "background":RISK_BG.get(lvl,"rgba(100,100,100,0.03)"),
+                  "borderRadius":"3px","marginBottom":"2px"}))
+    return html.Div(rows)
 
 
 if __name__ == "__main__":
