@@ -40,7 +40,7 @@ The large map shows a bird's-eye view of Los Angeles International Airport (KLAX
 
 **The dashed lines** show where each entity will be in the next 20 seconds. When a dashed line from an aircraft and a dashed line from a vehicle point toward the same spot, that's a potential conflict.
 
-**The dashed circles** that appear on the runway mark the Closest Point of Approach (CPA) — where two entities will get closest to each other. The label shows distance in meters and how many seconds away. "21m · 8s" means two entities will pass within 21 meters of each other in 8 seconds — that's a crisis.
+**The dashed circles** that appear on the runway mark the Closest Point of Approach (CPA), where two entities will get closest to each other. The label shows distance in meters and how many seconds away. "21m · 8s" means two entities will pass within 21 meters of each other in 8 seconds.
 
 ### The alert banner
 The colored bar at the top shows the worst situation right now: which aircraft and vehicle are the most dangerous pair, how close they'll get, and how much time there is.
@@ -66,7 +66,7 @@ This project takes a different approach: **let the model learn the thresholds fr
 
 The research question is whether a data-driven approach can generalize better to edge cases that rule-based systems miss, produce probabilistic risk scores that give more nuanced information, and adapt to different airports without manual re-tuning.
 
-This is an active area of research. Runway incursions cause approximately 3 fatal accidents per year worldwide. The most deadly aviation accident in history — Tenerife 1977, 583 deaths — was a runway collision. Despite decades of work, incursion rates have not significantly declined.
+This is an active area of research. Runway incursions cause approximately 3 fatal accidents per year worldwide. The most deadly aviation accident in history, Tenerife 1977, 583 deaths was a runway collision. Despite decades of work, incursion rates have not significantly declined.
 
 ---
 
