@@ -17,7 +17,7 @@ def train(dataset_path: str, output_dir: str = "ml/model"):
     X, y = prepare_dataset(df)
     print(f"Features: {X.shape[1]} columns")
 
-    # Split by scenario ID — never by row
+    # split by scenario ID
     groups = df["scenario_id"].astype(str)
     splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
     train_idx, test_idx = next(splitter.split(X, y, groups=groups))
@@ -27,12 +27,12 @@ def train(dataset_path: str, output_dir: str = "ml/model"):
 
     print(f"Train: {len(X_train):,} | Test: {len(X_test):,}")
 
-    # Scale
+    # scale
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
     X_test_s = scaler.transform(X_test)
 
-    # Class weights
+    # class weights
     class_counts = np.bincount(y_train)
     total = len(y_train)
     weights = {i: total / (len(class_counts) * c)
@@ -40,7 +40,7 @@ def train(dataset_path: str, output_dir: str = "ml/model"):
     sample_weights = np.array([weights[l] for l in y_train])
     print(f"Class weights: {weights}")
 
-    # Train
+    # train
     print("\nTraining XGBoost...")
     model = xgb.XGBClassifier(
         n_estimators=300,
@@ -60,7 +60,7 @@ def train(dataset_path: str, output_dir: str = "ml/model"):
         verbose=50,
     )
 
-    # Save
+    # save
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     model.save_model(f"{output_dir}/xgboost.json")
     with open(f"{output_dir}/scaler.pkl", "wb") as f:

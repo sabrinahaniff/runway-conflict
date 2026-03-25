@@ -35,7 +35,7 @@ class ConflictPredictor:
         """
         Given current aircraft + vehicle state, return risk prediction.
         """
-        # Build raw feature row (same schema as training data)
+        # Build raw feature row 
         dx = vehicle.x - aircraft.x
         dy = vehicle.y - aircraft.y
         dist = max(np.sqrt(dx**2 + dy**2), 1e-6)
