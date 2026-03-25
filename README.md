@@ -1,7 +1,5 @@
 # Runway Conflict Detection System
 
-A machine learning system that monitors aircraft landing at airports and detects potential collisions with ground vehicles in real time. Built as a research prototype demonstrating an ML-based approach to runway safety monitoring.
-
 ---
 
 ## What this system does
