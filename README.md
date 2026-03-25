@@ -16,9 +16,9 @@ It outputs one of three alerts:
 
 | Alert | Meaning |
 |---|---|
-| GREEN — SAFE | No conflicts predicted in the next 60 seconds |
-| ORANGE — WARNING | A potential conflict is developing — monitor closely |
-| RED — HIGH RISK | Collision course predicted — immediate action needed |
+| GREEN: SAFE | No conflicts predicted in the next 60 seconds |
+| ORANGE: WARNING | A potential conflict is developing, monitor closely |
+| RED: HIGH RISK | Collision course predicted, immediate action needed |
 
 ---
 
