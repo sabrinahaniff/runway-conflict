@@ -58,7 +58,7 @@ How overall risk has changed over the last 60 ticks (~24 seconds). The spike fro
 
 ### Don't airports already have systems for this?
 
-Yes — systems like RIMCAS and ASDE-X exist at major airports. They use rule-based detection: fixed geometric thresholds hardcoded by engineers. If an aircraft is within X meters of the runway and a vehicle is within Y meters of the centerline, alert.
+Yes, systems like RIMCAS and ASDE-X exist at major airports. They use rule-based detection: fixed geometric thresholds hardcoded by engineers. If an aircraft is within X meters of the runway and a vehicle is within Y meters of the centerline, alert.
 
 This project takes a different approach: **let the model learn the thresholds from data rather than hardcoding them.**
 
